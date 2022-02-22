@@ -1,0 +1,131 @@
+# Base Configuration the selected device
+# Valid for esp32 and esp8266 w/o BLE SCANNER
+#
+# Used substitutions:
+#
+# - device_name_short: Hostname for the device
+# - platform: used platform
+# - board: used board
+# - node_name: name of the device
+# - secret file for all private settings
+#
+# Setup for:
+#
+#   - WIFI
+#   - WEBSERVER
+#   - LOGGER
+#   - OTA
+#   - Time server
+#   - API Homeassistant
+#   - BLE TRACKER
+#   - Globals for bootcounter, daily value
+#
+#  Sensors:
+#   - binary_sensor status
+#   - switch restart
+#   - switch reset boot counter
+#   - sensor Boot counter
+#   - sensor uptime
+#   - sensor wifi_signal
+#   - text_sensor version
+#   - text_sensor Online seit
+#   - text_sensor IP address
+#   - text_sensor SSID Name
+#   - text_sensor BSSID
+#   - text_sensor Current Timestamp
+
+
+# substitutions:
+#   update_interval: 60s
+
+esphome:
+  name: ${device_name_short}
+  build_path: ./build/${device_name_short}
+  on_boot:
+    then:
+      - logger.log:
+          level: info
+          format: "BOOTMESSAGE:${device_name_short} API is connected, Device ready!"
+      - globals.set:
+          id: boot_counter
+          value: !lambda "return id(boot_counter)+=1;"
+  on_shutdown:
+    then:
+      - logger.log: ${device_name_short} is down!
+
+## ---------------------------------------------------
+## WIFI Settings
+## ---------------------------------------------------
+wifi:
+  use_address: ${device_name_short}.local
+  networks:
+    - ssid:  !secret ssid1_name
+      password: !secret ssid1_pswd
+    - ssid:  !secret ssid2_name
+      password: !secret ssid2_pswd
+
+## ---------------------------------------------------
+## WEBSERVER Settings
+## ---------------------------------------------------
+web_server:
+  port: 80
+  css_include: "_static/webserver-v1.min.css"
+  css_url: ""
+  js_include: "_static/webserver-v1.min.js"
+  js_url: ""
+
+## ---------------------------------------------------
+## Enable logging
+## ---------------------------------------------------
+logger:
+
+## ---------------------------------------------------
+## OTA Settings
+## ---------------------------------------------------
+ota:
+  password: !secret ota_pswd
+  on_error:
+    then:
+      - logger.log:
+          format: "OTA update error %d"
+          args: ["x"]
+
+# ----------------------------------------------------------------
+# Native API Component
+# ----------------------------------------------------------------
+api:
+  id: espapi
+  port: 6053
+  reboot_timeout: 5min
+
+## ---------------------------------------------------
+## SNTP Time server
+## ---------------------------------------------------
+time:
+  - platform: sntp
+    id: sntp_time
+    timezone: Europe/Berlin
+    servers:
+      - 0.at.pool.ntp.org
+      - 0.pool.ntp.org
+      - 1.pool.ntp.org
+    on_time:
+      - seconds: 0
+        minutes: 0
+        hours: 0
+        then:
+          - lambda: |-
+              if(id(daily_value)){
+                 id(daily_value)=0.00;
+              }
+      - seconds: 0
+        minutes: 0
+        then:
+          - lambda: |-
+              if(id(hour_value)){
+                 id(hour_value)=0.00;
+              }
+    on_time_sync:
+      then:
+        - logger.log: "Synchronized sntp clock"
+

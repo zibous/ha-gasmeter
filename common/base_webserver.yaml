@@ -1,0 +1,9 @@
+## ---------------------------------------------------
+## WEBSERVER Settings
+## ---------------------------------------------------
+web_server:
+  port: 80
+  css_include: "_static/webserver-v1.min.css"
+  css_url: ""
+  js_include: "_static/webserver-v1.min.js"
+  js_url: ""
