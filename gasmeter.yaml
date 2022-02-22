@@ -1,0 +1,253 @@
+## ################################################################
+## ESP32 DEV  - GAS & WASSER 2021 - SENSOREN
+## ESP32 NodeMCU Module WLAN WiFi Development Board mit CP2102
+##   - GPIO19: Pulscounter Gaszähler
+## ################################################################
+esp32:
+  board: esp32dev
+  framework:
+    type: arduino
+    version: recommended
+
+substitutions:
+  platform: ESP32
+  board: esp32dev
+  device_name_short: "gasmeter" # used by esp-home config
+  friendly_name: "GM2021"
+  device_description: "Gasmeter"
+  update_interval: 60s
+  impulsfactor: "0.100"
+  appversion: "1.1.7"
+
+esphome:
+  project:
+    name: "gasmeter.esp32WUG"
+    version: ${appversion}
+
+# ----------------------------------------------------------------
+# Global variables
+# ----------------------------------------------------------------
+globals:
+  - id: z61count
+    type: int
+    restore_value: yes
+    initial_value: "0"
+  - id: z61counter
+    type: float
+    restore_value: yes
+    initial_value: "0.0"
+  - id: m3kw
+    type: float
+    restore_value: yes
+    initial_value: "10.94"
+  - id: gas_meter_displayinital
+    type: float
+    restore_value: yes
+    initial_value: "29060.654"
+  - id: gas_meter_displayvalue
+    type: float
+    restore_value: yes
+    initial_value: "29246.433"
+  - id: gas_meter_totalm3
+    type: float
+    restore_value: yes
+    initial_value: "0.0"
+
+# ---------------------------------------
+# Base packages wifi, timeserver...
+# ---------------------------------------
+packages:
+  base: !include common/base.yaml
+  base_webserver: !include common/base_webserver.yaml
+  base_global: !include common/base_global.yaml
+
+# ----------------------------------------------------------------
+# Native API Component
+# ----------------------------------------------------------------
+api:
+  id: espapi
+  port: 6053
+  reboot_timeout: 5min
+  services:
+    - service: set_gasmeterdisplay
+      variables:
+        my_newdisplayvalue: float
+      then:
+        - logger.log:
+            format: "Setting Gasmeter Display value: %.1f"
+            args: [my_newdisplayvalue]
+        - globals.set:
+            id: gas_meter_displayvalue
+            value: !lambda "return (my_newdisplayvalue);"
+        - globals.set:
+            id: z61counter
+            value: !lambda "return (my_newdisplayvalue);"
+        - globals.set:
+            id: gas_meter_totalm3
+            value: !lambda "return ((my_newdisplayvalue) - id(gas_meter_displayinital));"
+        - globals.set:
+            id: z61count
+            value: !lambda "return ( ((my_newdisplayvalue) - id(gas_meter_displayinital))/${impulsfactor} );"
+        - logger.log:
+            format: "Gasmeter Display value: %.1f"
+            args: [id(gas_meter_displayvalue)]
+
+# ----------------------------------------------------------------
+# Switch to restart, reset all, reset bootcounter
+# ----------------------------------------------------------------
+switch:
+  - platform: template
+    name: ${friendly_name} reset all
+    turn_on_action:
+      then:
+        - lambda: |-
+            id(boot_counter) = 0;
+            id(z61counter) = 0.0;
+            id(z61count) = 0;
+            id(gas_meter_totalm3)= 0.0;
+            id(gas_meter_displayvalue)= 0.0;
+            id(daily_value)= 0.0;
+            id(hour_value)= 0.0;
+            id(bootcounter).update();
+            id(gas_meter_display).update();
+            id(gas_meter_total_m3).update();
+            id(gas_meter_total_kw).update();
+            id(gas_meter_total_kw_day).update();
+        - logger.log: ${device_name_short} all values reset!
+
+# ----------------------------------------------------------------
+# GASCOUNTER ZI-61 REED CONTACT
+# GPIO19 <-- o-RC-o <--- GND
+#            o-10k ----> +5V
+# +++++++++++++++++++++++++++++++
+# Gasmeter: Krom Schröder BK-G,25
+# ++++++++++++++++++++++++++++++++
+# Q_max: 4 m³/h
+# Q_min: 0.025 m³/h
+# V: 1.2 dm³
+# p_max: 0.5 bar
+# 1 imp = 0.1 m³
+# ----------------------------------------------------------------
+binary_sensor:
+  - platform: gpio
+    pin:
+      number: GPIO19
+      mode: INPUT_PULLUP ## set ESP32 pin to input pull-up mode
+      inverted: false
+    name: ${friendly_name} Gaszähler Z-61 Impuls
+    id: gassensor_state
+    device_class: window
+    filters:
+      - delayed_off: 10ms
+    ## This automation will be triggered when a button press ends,
+    ## or in other words on the falling edge of the signal.
+    on_release:
+      then:
+        - lambda: |-
+            ESP_LOGI("main", " -------  Z-61 SET NEW VALUES !!!!!");
+            id(z61count) += 1;
+            id(z61counter) += ${impulsfactor};
+            id(gas_meter_displayvalue) += ${impulsfactor};
+            id(gas_meter_totalm3) += ${impulsfactor};
+            id(daily_value) += ${impulsfactor};
+            id(hour_value) += ${impulsfactor};
+            id(gas_meter_display).update();
+            id(gas_meter_total_m3).update();
+            id(gas_meter_total_kw).update();
+            id(gas_meter_total_kw_day).update();
+            id(gas_meter_m3_today).publish_state(${impulsfactor});
+
+# ----------------------------------------------------------------
+# ALL SENSORS
+# ----------------------------------------------------------------
+sensor:
+  - platform: template
+    name: ${friendly_name} Gasmeter Display
+    id: gas_meter_display
+    accuracy_decimals: 1
+    unit_of_measurement: "m³"
+    icon: "mdi:counter"
+    device_class: gas
+    lambda: |-
+      return id(gas_meter_displayvalue);
+
+  - platform: template
+    name: ${friendly_name} Gasmeter current
+    id: gas_meter_m3_today
+    state_class: measurement
+    device_class: gas
+    unit_of_measurement: "m³"
+    accuracy_decimals: 2
+
+  - platform: template
+    name: ${friendly_name} Gasmeter Impulse
+    id: gas_meter_impulse_count
+    state_class: measurement
+    accuracy_decimals: 0
+    lambda: |-
+      return (id(z61count));
+
+  - platform: template
+    name: ${friendly_name} Gas total
+    id: gas_meter_total_m3
+    accuracy_decimals: 1
+    unit_of_measurement: "m³"
+    device_class: gas
+    state_class: total_increasing
+    lambda: |-
+      return id(gas_meter_totalm3);
+
+  - platform: template
+    name: ${friendly_name} Gas per today
+    id: gas_meter_total_m3_day
+    unit_of_measurement: "m³"
+    state_class: total_increasing
+    accuracy_decimals: 1
+    icon: mdi:gauge
+    lambda: |-
+      return (id(daily_value));
+
+  - platform: template
+    name: ${friendly_name} Gas per hour
+    id: gas_meter_total_m3_hour
+    unit_of_measurement: "m³"
+    state_class: total_increasing
+    accuracy_decimals: 1
+    icon: mdi:gauge
+    lambda: |-
+      return (id(hour_value));
+
+  - platform: template
+    name: ${friendly_name} Kilowattstunde Gas total
+    id: gas_meter_total_kw
+    accuracy_decimals: 2
+    device_class: energy
+    state_class: measurement
+    unit_of_measurement: "kWh"
+    lambda: |-
+      return (id(gas_meter_totalm3) * id(m3kw));
+
+  - platform: template
+    name: ${friendly_name} Kilowattstunde Gas today
+    id: gas_meter_total_kw_day
+    unit_of_measurement: "kWh"
+    state_class: measurement
+    device_class: energy
+    accuracy_decimals: 2
+    lambda: |-
+      return (id(daily_value) * id(m3kw));
+
+  - platform: template
+    name: ${friendly_name} Kilowattstunde Gas per hour
+    id: gas_meter_total_kw_hour
+    unit_of_measurement: "kWh"
+    state_class: measurement
+    device_class: energy
+    accuracy_decimals: 2
+    lambda: |-
+      return (id(hour_value) * id(m3kw));
+
+logger:
+  level: NONE
+  # baud_rate: 9600
+  baud_rate: 0
