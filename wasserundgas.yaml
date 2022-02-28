@@ -1,0 +1,282 @@
+## ################################################################
+## ESP32 DEV  - GAS & WASSER 2021 - SENSOREN
+##   - GPIO12: Pulscounter Gaszähler
+##   - GPIO34: Druck Kaltwasser
+##   - GPIO17: Kaltwasser Temperatur
+## ################################################################
+substitutions:
+  device_id: "wasserundgas"
+  device_name: "wasserundgas"
+  device_name_short: "wasserundgas"
+  device_name_upper: "GWS"
+  update_interval: 60s
+  impulsfactor: "0.100"
+  platform: ESP32
+  board: esp32dev
+  attribution: "Data provided by Peter Siebler"
+  appversion: "1.0.4"
+  topic_prefix: "tele/wasserundgas"
+  topic_data: "tele/wasserundgas/data"
+  device_description: "Gaszähler Kaltwassertemperatur, Kaltwasserdruck"
+
+esphome:
+  name: $device_name
+  comment: ${device_description}
+  platform: ${platform}
+  board: ${board}
+  arduino_version: recommended
+  project:
+    name: "ips.home"
+    version: ${appversion}
+  on_boot:
+    priority: -10
+    then:
+      - logger.log: "API is connected, Device ready!"
+
+# ----------------------------------------------------------------
+# Global variables
+# ----------------------------------------------------------------
+globals:
+  - id: z61count
+    type: int
+    restore_value: yes
+    initial_value: "0"
+  - id: z61counter
+    type: float
+    restore_value: yes
+    initial_value: "0.000"
+  - id: m3kw
+    type: float
+    restore_value: yes
+    initial_value: "10.94"
+  - id: gas_meter_displayvalue
+    type: float
+    restore_value: yes
+    initial_value: "29121.057"
+  - id: gas_meter_totalm3
+    type: float
+    restore_value: yes
+    initial_value: "0.000"
+  - id: daily_value
+    type: float
+    restore_value: yes
+    initial_value: "0.000"
+
+# ----------------------------------------------------------------
+# MQTT Client Component
+# ----------------------------------------------------------------
+# see: https://esphome.io/components/mqtt.html?highlight=mqtt
+# inlude mqtt broker and wifi settings w/o api
+# sets wifi, ap, domain, default logger, ota password, webserver
+#      time sntp, mqtt brocker.
+<<: !include common/mqttonly.yaml
+
+# ----------------------------------------------------------------
+# Logger settings
+# ----------------------------------------------------------------
+logger:
+  level: INFO
+  logs:
+    mqtt.component: ERROR
+    mqtt.client: ERROR
+
+# ----------------------------------------------------------------
+# GPIO02: used for temperatur sensors data wired
+# ----------------------------------------------------------------
+dallas:
+  pin: GPIO17
+  update_interval: ${update_interval}
+
+switch:
+  # Switch to restart
+  - platform: restart
+    name: ${device_name_upper} restart
+
+# ----------------------------------------------------------------
+# GASCOUNTER ZI-61 REED CONTACT
+# ----------------------------------------------------------------
+binary_sensor:
+  - platform: gpio
+    pin:
+      number: GPIO12
+      mode: INPUT_PULLUP
+      inverted: false
+    name: ${device_name_upper} Gaszähler Z-61 Impuls
+    id: gassensor_state
+    device_class: window
+    filters:
+      - delayed_off: 10ms
+    on_release:
+      then:
+        - lambda: |-
+            id(z61counter) += ${impulsfactor};
+            id(z61count) += 1;
+            id(gas_meter_totalm3) += ${impulsfactor};
+            id(gas_meter_displayvalue) += ${impulsfactor};
+            id(daily_value) += ${impulsfactor};
+            id(gas_meter_display).update();
+            id(gas_meter_total_m3).update();
+            id(gas_meter_total_kw).update();
+            id(gas_meter_total_kw_day).update();
+
+# ----------------------------------------------------------------
+# ALL SENSORS
+# ----------------------------------------------------------------
+sensor:
+  - platform: template
+    name: ${device_name_upper} Gaszähler Anzeige
+    id: gas_meter_display
+    accuracy_decimals: 3
+    unit_of_measurement: "m³"
+    icon: "mdi:counter"
+    state_topic: ${topic_prefix}/gas_meter_displayvalue
+    lambda: |-
+      return id(gas_meter_displayvalue);
+
+  - platform: template
+    name: ${device_name_upper} Gasverbrauch
+    id: gas_meter_total_m3
+    accuracy_decimals: 3
+    unit_of_measurement: "m³"
+    state_topic: ${topic_prefix}/gas_total_m3
+    lambda: |-
+      return id(gas_meter_totalm3);
+
+  - platform: template
+    name: ${device_name_upper} Gasverbrauch kW
+    id: gas_meter_total_kw
+    accuracy_decimals: 3
+    unit_of_measurement: "kW"
+    state_topic: ${topic_prefix}/gas_total_kw
+    lambda: |-
+      return (id(gas_meter_totalm3) * id(m3kw));
+
+  - platform: template
+    name: ${device_name_upper} Gasverbrauch heute
+    id: gas_meter_total_kw_day
+    unit_of_measurement: "kW"
+    lambda: |-
+      return (id(daily_value) * id(m3kw));
+
+  # -----------------------------------------------------
+  # DFRobot SEN0257 water pressure sensor 1 GPIO 34
+  # -----------------------------------------------------
+  - platform: adc
+    name: ${device_name_upper} Kaltwasser Wasserdruck
+    pin: GPIO34
+    id: coldwater_pressure
+    update_interval: 10s
+    unit_of_measurement: "bar"
+    accuracy_decimals: 2
+    attenuation: 11db
+    state_topic: ${topic_prefix}/coldwater_pressure
+    filters:
+      - lambda: |-
+          if(x-0.41<0) return 0.00;
+          return ((x) * 2.00) - 0.82;
+
+  # ------------------------------------------------------------------------------
+  # PIN GIPO17: DS18B20 Digital temperature sensor 1
+  # For this, connect a resistor of about 4.7KΩ (values around that like 1KΩ will,
+  # if you don’t have massively long wires, work fine in most cases)
+  # between 3.3V and the data pin.
+  # Unique ID: 'dallas-7900000C8579C728'
+  # ------------------------------------------------------------------------------
+  - platform: dallas
+    # index: 0
+    address: 0x7900000C8579C728
+    accuracy_decimals: 2
+    unit_of_measurement: "°C"
+    name: ${device_name_upper} Kaltwasser Temperatur
+    id: coldwater_temperature
+    icon: mdi:thermometer-lines
+    state_topic: ${topic_prefix}/coldwater_temperature
+
+  - platform: wifi_signal
+    id: wifisignal
+    name: ${device_name_upper} WiFi Signal
+    update_interval: 60s
+
+  # -----------------------------------------------
+  # additional sensors
+  # -----------------------------------------------
+  - platform: uptime
+    name: ${device_name_upper} Uptime Sensor
+    id: uptime_sensor
+    update_interval: ${update_interval}
+    on_raw_value:
+      then:
+        - text_sensor.template.publish:
+            id: uptime_human
+            state: !lambda |-
+              int seconds = round(id(uptime_sensor).raw_state);
+              int days = seconds / (24 * 3600);
+              seconds = seconds % (24 * 3600);
+              int hours = seconds / 3600;
+              seconds = seconds % 3600;
+              int minutes = seconds /  60;
+              seconds = seconds % 60;
+              return (
+                (days ? String(days) + "d " : "") +
+                (hours ? String(hours) + "h " : "") +
+                (minutes ? String(minutes) + "m " : "") +
+                (String(seconds) + "s")
+              ).c_str();
+    on_value:
+      - mqtt.publish_json:
+          topic: "tele/wasserundgas/data"
+          payload: !lambda |-
+            root["name_pretty"] = "${device_name_upper}";
+            root["gas_meter_sensor"] =  id(gassensor_state).state;
+            root["gas_display"] = id(gas_meter_display).state;
+            root["gas_meter_total_m3"] = id(gas_meter_total_m3).state;                
+            root["gas_meter_total_kw"] = id(gas_meter_total_kw).state;
+            root["z61counter"] = id(z61counter);
+            root["z61count"] = id(z61count);
+            root["coldwater_pressure"] = isnan(id(coldwater_pressure).state)?0:id(coldwater_pressure).state;
+            root["coldwater_temperature"] = isnan(id(coldwater_temperature).state)?0:id(coldwater_temperature).state;
+            root["wifi_signal"] = id(wifisignal).state;
+            root["wif_iip"] = id(wifiip).state;
+            root["wifi_ssid"] = id(wifissid).state;
+            root["wifi_bssid"] = id(wifibssid).state;
+            root["version"] = id(appver).state;
+            root["timestamp"] = id(systime).state;
+            root["uptime"] = id(uptime_sensor).state;
+            root["uptime_human"] = id(uptime_human).state;
+            root["appversion"] = "${appversion}";
+            root["attribution"] = "${attribution}";
+
+## -----------------------------------------------------------
+## additional sensor data
+## -----------------------------------------------------------
+text_sensor:
+  - platform: version
+    name: ${device_name_upper} Version
+    id: appver
+
+  - platform: template
+    name: ${device_name_upper} Online seit
+    id: uptime_human
+    icon: mdi:clock-start
+
+  - platform: wifi_info
+    ip_address:
+      name: ${device_name_upper} IP
+      id: wifiip
+      icon: mdi:ip-network
+
+    ssid:
+      name: ${device_name_upper} SSID
+      id: wifissid
+
+    bssid:
+      id: wifibssid
+      name: ${device_name_upper} BSSID
+
+  - platform: template
+    name: ${device_name_upper} Timestamp
+    id: systime
+    lambda: char str[20];
+      time_t currTime = id(sntp_time).now().timestamp;
+      strftime(str, sizeof(str), "%Y-%m-%dT%H:%M:%S", localtime(&currTime));
+      return (std::string) str;
